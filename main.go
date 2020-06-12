@@ -6,6 +6,7 @@ import (
 	"io/ioutil"     // Needed to read data from the USGS website
 	"net/http"      // Needed to query the USGS website
 	"regexp"        // Needed to parse the location data
+	"strconv"       // Needed to convert strings to a float
 	"strings"       // Needed for strings.ToUpper
 	"time"          // Needed to parse the unix timestamp from USGS
 
@@ -14,9 +15,9 @@ import (
 )
 
 const (
-	USGSAPI = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
+	USGSAPI    = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
 	TIMEFORMAT = "Jan/02/15:04:05/MST"
-	)
+)
 
 type geoJson struct {
 	Type     string           `json:"type"`
@@ -77,7 +78,7 @@ type geoJsonGeometry struct {
 func main() {
 
 	app := tview.NewApplication()
-	table := tview.NewTable().SetBorders(true).SetSelectable(true, false).SetFixed(1,0)
+	table := tview.NewTable().SetBorders(true).SetSelectable(true, false).SetFixed(1, 0)
 
 	for column := 0; column < 4; column++ {
 		color := tcell.ColorYellow
@@ -128,9 +129,11 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 	var rowToInsert int
 	var quakeTime time.Time
 	var rowTime time.Time
+	var quakeMag float64
 
 	rowToInsert = 1
 	quakeTime, _ = time.Parse(TIMEFORMAT, quake[0])
+	quakeMag, _ = strconv.ParseFloat(quake[1], 32)
 
 	for row := 1; row < table.GetRowCount(); row++ {
 		rowTime, _ = time.Parse(TIMEFORMAT, table.GetCell(row, 0).Text)
@@ -144,6 +147,14 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 		table.InsertRow(rowToInsert)
 		for column := 0; column < 4; column++ {
 			color := tcell.ColorGreen
+			switch {
+			case quakeMag >= 4 && quakeMag <= 5.9:
+				color = tcell.ColorYellow
+			case quakeMag >= 6 && quakeMag <= 6.9:
+				color = tcell.ColorOrange
+			case quakeMag >= 7:
+				color = tcell.ColorRed
+			}
 			align := tview.AlignLeft
 			if column == 0 {
 				color = tcell.ColorDarkCyan
