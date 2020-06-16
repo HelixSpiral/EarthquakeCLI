@@ -5,9 +5,7 @@ import (
 	"fmt"           // Needed for printing
 	"io/ioutil"     // Needed to read data from the USGS website
 	"net/http"      // Needed to query the USGS website
-	"regexp"        // Needed to parse the location data
 	"strconv"       // Needed to convert strings to a float
-	"strings"       // Needed for strings.ToUpper
 	"time"          // Needed to parse the unix timestamp from USGS
 
 	"github.com/gdamore/tcell"
@@ -19,6 +17,8 @@ const (
 	TIMEFORMAT = "Jan/02/15:04:05/MST"
 )
 
+// Structs for holding the GeoJson information
+// From the USGS: https://tools.ietf.org/html/rfc7946
 type geoJson struct {
 	Type     string           `json:"type"`
 	Metadata geoJsonMetadata  `json:"metadata"`
@@ -77,9 +77,14 @@ type geoJsonGeometry struct {
 
 func main() {
 
+	// Create the new app and table
 	app := tview.NewApplication()
 	table := tview.NewTable().SetBorders(true).SetSelectable(true, false).SetFixed(1, 0)
 
+	// We store the quakes we've already put in the table so we don't get dupes
+	quakesSeen := make(map[int64]string)
+
+	// Populate with initial layout data
 	for column := 0; column < 4; column++ {
 		color := tcell.ColorYellow
 		align := tview.AlignCenter
@@ -104,10 +109,12 @@ func main() {
 			})
 	}
 
-	quakesSeen := make(map[int64]string)
-
+	// Run updating the table in a go routine
 	go func(app *tview.Application, table *tview.Table, quakesSeen map[int64]string) {
+		// We have to do an initial populate because the updateTick takes a minute
 		populateTableData(app, table, quakesSeen)
+
+		// Tickers to redraw the app and update with new data
 		updateTick := time.NewTicker(time.Minute).C
 		drawTick := time.NewTicker(time.Second).C
 		for {
@@ -125,6 +132,7 @@ func main() {
 	}
 }
 
+// Add a new row to the table
 func addRow(app *tview.Application, table *tview.Table, quake []string) {
 	var rowToInsert int
 	var quakeTime time.Time
@@ -135,6 +143,8 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 	quakeTime, _ = time.Parse(TIMEFORMAT, quake[0])
 	quakeMag, _ = strconv.ParseFloat(quake[1], 32)
 
+	// Loop for the table rows to figure out where to put the new row based on the time it happened
+	// Occasionally we'll get a 10-15 minute old quake we haven't seen from the USGS, not sure why
 	for row := 1; row < table.GetRowCount(); row++ {
 		rowTime, _ = time.Parse(TIMEFORMAT, table.GetCell(row, 0).Text)
 
@@ -143,14 +153,16 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 			break
 		}
 	}
+
+	// Actually update the table
 	app.QueueUpdateDraw(func() {
 		table.InsertRow(rowToInsert)
 		for column := 0; column < 4; column++ {
 			color := tcell.ColorGreen
 			switch {
-			case quakeMag >= 4 && quakeMag <= 5.9:
+			case quakeMag >= 4 && quakeMag <= 5.99:
 				color = tcell.ColorYellow
-			case quakeMag >= 6 && quakeMag <= 6.9:
+			case quakeMag >= 6 && quakeMag <= 6.99:
 				color = tcell.ColorOrange
 			case quakeMag >= 7:
 				color = tcell.ColorRed
@@ -171,6 +183,7 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 	})
 }
 
+// Get the list of quakes and update the table
 func populateTableData(app *tview.Application, table *tview.Table, quakesSeen map[int64]string) {
 	quakeList := getQuakeList(quakesSeen)
 
@@ -179,6 +192,7 @@ func populateTableData(app *tview.Application, table *tview.Table, quakesSeen ma
 	}
 }
 
+// Get the list of quakes
 func getQuakeList(quakesSeen map[int64]string) [][]string {
 	var quakeList [][]string
 
@@ -190,6 +204,7 @@ func getQuakeList(quakesSeen map[int64]string) [][]string {
 		data.Features[i], data.Features[opp] = data.Features[opp], data.Features[i]
 	}
 
+	// Loop over all the quakes in the list and get the data we want from them.
 	for _, y := range data.Features {
 		if quakesSeen[y.Properties.Time] == y.Properties.URL {
 			continue
@@ -207,6 +222,7 @@ func getQuakeList(quakesSeen map[int64]string) [][]string {
 	return quakeList
 }
 
+// Query the USGS API
 func getUsgsGeoStats(url string) geoJson {
 	var jsonData geoJson
 	resp, err := http.Get(url)
@@ -223,19 +239,4 @@ func getUsgsGeoStats(url string) geoJson {
 	}
 
 	return jsonData
-}
-
-// Unused legacy func
-func displayFeature(geoFeat *geoJsonFeature) {
-	locationRegex := regexp.MustCompile(`(\d{1,3}\s?km)\s([NESW]+)\sof\s([^.+]+)$`)
-	locationSplit := locationRegex.FindStringSubmatch(geoFeat.Properties.Place)
-
-	// Sometimes we get fucked location data, if we do just print the unparsed location.
-	if len(locationSplit) < 3 {
-		fmt.Printf("[%s|%v] %s\r\n", strings.ToUpper(geoFeat.Properties.Type), time.Unix(geoFeat.Properties.Time/1000, 0).Format("2006/Jan/02/15:04:05/MST"), geoFeat.Properties.Place)
-	} else {
-		fmt.Printf("[%s|%v] %s (%s %s)\r\n", strings.ToUpper(geoFeat.Properties.Type), time.Unix(geoFeat.Properties.Time/1000, 0).Format("2006/Jan/02/15:04:05/MST"), locationSplit[3], locationSplit[1], locationSplit[2])
-	}
-	fmt.Println("\t- Magnitude:", geoFeat.Properties.Mag)
-	fmt.Printf("\t- Coords: [Long: %f, Lat: %f, Z: %f\r\n", geoFeat.Geometry.Coordinates[0], geoFeat.Geometry.Coordinates[1], geoFeat.Geometry.Coordinates[2])
 }
