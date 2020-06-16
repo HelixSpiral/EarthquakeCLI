@@ -10,4 +10,4 @@ To run: `./QuakeCLI`
 
 Sample Output
 ---
-![Sample Output](./images/QuakeCLI.png)
+![Sample Output](./images/QuakeCLI.PNG)
