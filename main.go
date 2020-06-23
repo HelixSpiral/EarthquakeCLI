@@ -82,22 +82,26 @@ func main() {
 	table := tview.NewTable().SetBorders(true).SetSelectable(true, false).SetFixed(1, 0)
 
 	// We store the quakes we've already put in the table so we don't get dupes
-	quakesSeen := make(map[int64]string)
+	quakeList := make(map[string]geoJsonFeature)
 
 	// Populate with initial layout data
-	for column := 0; column < 4; column++ {
+	for column := 0; column < 5; column++ {
 		color := tcell.ColorYellow
 		align := tview.AlignCenter
 		text := ""
 		switch column {
 		case 0:
-			text = "Time"
+			text = "ID"
 		case 1:
-			text = "Magnitude"
+			text = "Time"
 		case 2:
-			text = "Location"
+			text = "Magnitude"
 		case 3:
-			text = "Coordinates"
+			text = "Location"
+
+		// This is just for debugging
+		case 4:
+			text = "Properties/IDs"
 		}
 		table.SetCell(0,
 			column,
@@ -110,9 +114,9 @@ func main() {
 	}
 
 	// Run updating the table in a go routine
-	go func(app *tview.Application, table *tview.Table, quakesSeen map[int64]string) {
+	go func(app *tview.Application, table *tview.Table, quakeList map[string]geoJsonFeature) {
 		// We have to do an initial populate because the updateTick takes a minute
-		populateTableData(app, table, quakesSeen)
+		populateTableData(app, table, quakeList)
 
 		// Tickers to redraw the app and update with new data
 		updateTick := time.NewTicker(time.Minute).C
@@ -122,10 +126,10 @@ func main() {
 			case <-drawTick:
 				app.Draw()
 			case <-updateTick:
-				populateTableData(app, table, quakesSeen)
+				populateTableData(app, table, quakeList)
 			}
 		}
-	}(app, table, quakesSeen)
+	}(app, table, quakeList)
 
 	if err := app.SetRoot(table, true).Run(); err != nil {
 		panic(err)
@@ -134,30 +138,44 @@ func main() {
 
 // Add a new row to the table
 func addRow(app *tview.Application, table *tview.Table, quake []string) {
-	var rowToInsert int
+	var atRow int
+	var rowID string
+	var foundTime bool
+	var updateNotInsert bool
 	var quakeTime time.Time
 	var rowTime time.Time
 	var quakeMag float64
 
-	rowToInsert = 1
-	quakeTime, _ = time.Parse(TIMEFORMAT, quake[0])
-	quakeMag, _ = strconv.ParseFloat(quake[1], 32)
+	atRow = 1
+	quakeTime, _ = time.Parse(TIMEFORMAT, quake[1])
+	quakeMag, _ = strconv.ParseFloat(quake[2], 32)
 
-	// Loop for the table rows to figure out where to put the new row based on the time it happened
-	// Occasionally we'll get a 10-15 minute old quake we haven't seen from the USGS, not sure why
+	// Loop for the table rows to:
+	// A) Check to see if we already have that quake ID in the table somewhere
+	// B) Figure out where the quake should go based on the time, if we don't already have it.
 	for row := 1; row < table.GetRowCount(); row++ {
-		rowTime, _ = time.Parse(TIMEFORMAT, table.GetCell(row, 0).Text)
+		rowTime, _ = time.Parse(TIMEFORMAT, table.GetCell(row, 1).Text)
+		rowID = table.GetCell(row, 0).Text
 
-		if rowTime.Before(quakeTime) {
-			rowToInsert = row
+		// If we have that ID in the table, get the row and break.
+		if rowID == quake[0] {
+			atRow = row
+			updateNotInsert = true
 			break
+		}
+
+		if !foundTime && rowTime.Before(quakeTime) {
+			atRow = row
+			foundTime = true
 		}
 	}
 
 	// Actually update the table
 	app.QueueUpdateDraw(func() {
-		table.InsertRow(rowToInsert)
-		for column := 0; column < 4; column++ {
+		if !updateNotInsert {
+			table.InsertRow(atRow)
+		}
+		for column := 0; column < 5; column++ {
 			color := tcell.ColorGreen
 			switch {
 			case quakeMag >= 4 && quakeMag <= 5.99:
@@ -171,7 +189,7 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 			if column == 0 {
 				color = tcell.ColorDarkCyan
 			}
-			table.SetCell(rowToInsert,
+			table.SetCell(atRow,
 				column,
 				&tview.TableCell{
 					Text:          quake[column],
@@ -184,17 +202,17 @@ func addRow(app *tview.Application, table *tview.Table, quake []string) {
 }
 
 // Get the list of quakes and update the table
-func populateTableData(app *tview.Application, table *tview.Table, quakesSeen map[int64]string) {
-	quakeList := getQuakeList(quakesSeen)
+func populateTableData(app *tview.Application, table *tview.Table, quakeList map[string]geoJsonFeature) {
+	usgsQuakeList := getQuakeList(quakeList)
 
-	for _, y := range quakeList {
+	for _, y := range usgsQuakeList {
 		addRow(app, table, y)
 	}
 }
 
 // Get the list of quakes
-func getQuakeList(quakesSeen map[int64]string) [][]string {
-	var quakeList [][]string
+func getQuakeList(quakeList map[string]geoJsonFeature) [][]string {
+	var usgsQuakeList [][]string
 
 	data := getUsgsGeoStats(USGSAPI)
 
@@ -206,20 +224,23 @@ func getQuakeList(quakesSeen map[int64]string) [][]string {
 
 	// Loop over all the quakes in the list and get the data we want from them.
 	for _, y := range data.Features {
-		if quakesSeen[y.Properties.Time] == y.Properties.URL {
+		/*if quakeList[y.Properties.Time] == y.Properties.URL {
 			continue
 		}
-		quakesSeen[y.Properties.Time] = y.Properties.URL
-		quakeList = append(quakeList,
+		*/
+		quakeList[y.ID] = y
+		usgsQuakeList = append(usgsQuakeList,
 			[]string{
+				y.ID,
 				time.Unix(y.Properties.Time/1000, 0).Format("Jan/02/15:04:05/MST"),
 				fmt.Sprintf("%.02f", y.Properties.Mag),
 				y.Properties.Place,
-				fmt.Sprintf("%f %f %f", y.Geometry.Coordinates[0], y.Geometry.Coordinates[1], y.Geometry.Coordinates[2]),
+				//	fmt.Sprintf("%f %f %f", y.Geometry.Coordinates[0], y.Geometry.Coordinates[1], y.Geometry.Coordinates[2]),
+				y.Properties.Ids,
 			})
 	}
 
-	return quakeList
+	return usgsQuakeList
 }
 
 // Query the USGS API
